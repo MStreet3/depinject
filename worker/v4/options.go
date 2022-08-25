@@ -6,7 +6,7 @@ import (
 
 // option is a private struct of the package that holds the default ticker value
 type option struct {
-	ticker <-chan heartbeat.Beat
+	hb <-chan heartbeat.Beat
 }
 
 // by default the ticker value is nil, which will get replaced via JIT DI
@@ -14,9 +14,9 @@ func newOption() *option {
 	return &option{}
 }
 
-// WithTicker is a public function for accessing option to set the ticker value
-func WithTicker(ticker <-chan heartbeat.Beat) func(*option) {
+// WithHeartbeat is a public function for accessing option to set the ticker value
+func WithHeartbeat(hb <-chan heartbeat.Beat) func(*option) {
 	return func(o *option) {
-		o.ticker = ticker
+		o.hb = hb
 	}
 }

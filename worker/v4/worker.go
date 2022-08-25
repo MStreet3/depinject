@@ -1,3 +1,7 @@
+/*
+Package worker/v4 implements a stream of random integers whos frequency can be configured by providing
+a heartbeat directly or a pulse width.
+*/
 package v4
 
 import (
@@ -16,10 +20,11 @@ type config interface {
 
 type randIntStream struct {
 	config
-	pulse <-chan heartbeat.Beat
+	hb <-chan heartbeat.Beat
 }
 
 func NewRandIntStream(cfg config, opts ...func(*option)) (*randIntStream, error) {
+	// load default options
 	o := newOption()
 
 	// apply each function to the option
@@ -29,26 +34,27 @@ func NewRandIntStream(cfg config, opts ...func(*option)) (*randIntStream, error)
 
 	ris := &randIntStream{
 		config: cfg,
-		pulse:  o.ticker,
+		hb:     o.hb,
 	}
 
-	if ris.config == nil && ris.pulse == nil {
+	if ris.config == nil && ris.hb == nil {
 		return nil, errors.New("must provide either a config or a ticker")
 	}
 
 	return ris, nil
 }
 
+// Start returns the stream of random integers, the stream has been shutdown if the returned channel is closed
 func (r *randIntStream) Start(ctx context.Context) <-chan int {
 	return r.worker(ctx.Done())
 }
 
-// worker calls does some arbitrary work each time a pulse is received until it is told to stop
+// worker calls does some arbitrary work with each heartbeat until it is told to stop
 func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
 	var (
-		values = make(chan int)
-		pulse  = r.getHeartbeat(stop)
-		doWork = func() int {
+		values    = make(chan int)
+		heartbeat = r.getHeartbeat(stop)
+		doWork    = func() int {
 			return rand.Int()
 		}
 	)
@@ -60,7 +66,7 @@ func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
 			select {
 			case <-stop:
 				return
-			case <-pulse:
+			case <-heartbeat:
 				fmt.Println("doing work...")
 				select {
 				case values <- doWork():
@@ -74,10 +80,11 @@ func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
 	return values
 }
 
+// getHeartbeat assigns a default heartbeat for the stream if one has not already been provided
 func (r *randIntStream) getHeartbeat(stop <-chan struct{}) <-chan heartbeat.Beat {
-	if r.pulse == nil {
-		return heartbeat.BeatUntil(stop, r.PulseWidth())
+	if r.hb == nil {
+		r.hb = heartbeat.BeatUntil(stop, r.PulseWidth())
 	}
 
-	return r.pulse
+	return r.hb
 }

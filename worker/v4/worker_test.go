@@ -18,7 +18,7 @@ func TestBeatingRandIntStream(t *testing.T) {
 		hb, isTicking = heartbeat.Beatn(wantCount)
 		gotCount      = 0
 		stopped       = make(chan struct{})
-		ris, err      = NewRandIntStream(nil, WithTicker(hb))
+		ris, err      = NewRandIntStream(nil, WithHeartbeat(hb))
 	)
 
 	t.Cleanup(func() {
