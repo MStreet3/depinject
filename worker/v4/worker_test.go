@@ -8,9 +8,10 @@ import (
 
 func TestBeatingRandIntStream(t *testing.T) {
 	var (
-		wantCount     = 100
-		d, _          = t.Deadline()
-		timeout       = time.Duration(int64(95) * int64(time.Until(d)) / int64(100)) // timeout at 95% of deadline to avoid test panic
+		wantCount = 100
+		d, _      = t.Deadline()
+		// timeout at 95% of deadline to avoid test panic
+		timeout       = time.Duration(int64(95) * int64(time.Until(d)) / int64(100))
 		ctxwt, cancel = context.WithTimeout(context.Background(), timeout)
 		hb, isTicking = tickNTimes(wantCount)
 		gotCount      = 0

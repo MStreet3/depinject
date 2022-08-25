@@ -10,16 +10,16 @@ import (
 	"github.com/mstreet3/depinject/entities"
 )
 
-type Config interface {
+type config interface {
 	PulseInterval() time.Duration
 }
 
-type RandIntStream struct {
-	cfg    Config
+type randIntStream struct {
+	config
 	ticker <-chan entities.Beat
 }
 
-func NewRandIntStream(cfg Config, opts ...func(*option)) (*RandIntStream, error) {
+func NewRandIntStream(cfg config, opts ...func(*option)) (*randIntStream, error) {
 	o := newOption()
 
 	// apply each function to the option
@@ -27,23 +27,23 @@ func NewRandIntStream(cfg Config, opts ...func(*option)) (*RandIntStream, error)
 		fn(o)
 	}
 
-	ris := &RandIntStream{
-		cfg:    cfg,
+	ris := &randIntStream{
+		config: cfg,
 		ticker: o.ticker,
 	}
 
-	if ris.cfg == nil && ris.ticker == nil {
+	if ris.config == nil && ris.ticker == nil {
 		return nil, errors.New("must provide either a config or a ticker")
 	}
 
 	return ris, nil
 }
 
-func (r *RandIntStream) Start(ctx context.Context) <-chan int {
+func (r *randIntStream) Start(ctx context.Context) <-chan int {
 	return r.worker(ctx.Done())
 }
 
-func (r *RandIntStream) worker(stop <-chan struct{}) <-chan int {
+func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
 	values := make(chan int)
 	go func() {
 		defer fmt.Println("done working!")
@@ -62,7 +62,7 @@ func (r *RandIntStream) worker(stop <-chan struct{}) <-chan int {
 	return values
 }
 
-func (r *RandIntStream) getTicker(stop <-chan struct{}) <-chan entities.Beat {
+func (r *randIntStream) getTicker(stop <-chan struct{}) <-chan entities.Beat {
 	if r.ticker == nil {
 		return getHeartbeat(stop, r.getDuration())
 	}
@@ -70,12 +70,12 @@ func (r *RandIntStream) getTicker(stop <-chan struct{}) <-chan entities.Beat {
 	return r.ticker
 }
 
-func (r *RandIntStream) getDuration() time.Duration {
-	if r.cfg.PulseInterval() == 0 {
+func (r *randIntStream) getDuration() time.Duration {
+	if r.PulseInterval() == 0 {
 		return 100 * time.Millisecond
 	}
 
-	return r.cfg.PulseInterval()
+	return r.PulseInterval()
 }
 
 func getHeartbeat(stop <-chan struct{}, d time.Duration) <-chan entities.Beat {
@@ -110,7 +110,7 @@ func tickNTimes(n int) (<-chan entities.Beat, <-chan struct{}) {
 func main() {
 	stop := make(chan struct{})
 	time.AfterFunc(3*time.Second, func() { close(stop) })
-	ris := &RandIntStream{}
+	ris := &randIntStream{}
 	for val := range ris.worker(stop) {
 		fmt.Printf("%d\n", val)
 	}
