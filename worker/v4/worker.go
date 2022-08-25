@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/mstreet3/depinject/entities"
+	"github.com/mstreet3/depinject/heartbeat"
 )
 
 type config interface {
@@ -16,7 +16,7 @@ type config interface {
 
 type randIntStream struct {
 	config
-	ticker <-chan entities.Beat
+	ticker <-chan heartbeat.Beat
 }
 
 func NewRandIntStream(cfg config, opts ...func(*option)) (*randIntStream, error) {
@@ -62,56 +62,14 @@ func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
 	return values
 }
 
-func (r *randIntStream) getTicker(stop <-chan struct{}) <-chan entities.Beat {
+func (r *randIntStream) getTicker(stop <-chan struct{}) <-chan heartbeat.Beat {
 	if r.ticker == nil {
-		return getHeartbeat(stop, r.getDuration())
+		return heartbeat.BeatUntil(stop, r.getDuration())
 	}
 
 	return r.ticker
 }
 
 func (r *randIntStream) getDuration() time.Duration {
-	if r.PulseInterval() == 0 {
-		return 100 * time.Millisecond
-	}
-
 	return r.PulseInterval()
-}
-
-func getHeartbeat(stop <-chan struct{}, d time.Duration) <-chan entities.Beat {
-	hb := make(chan entities.Beat)
-	go func() {
-		defer close(hb)
-		for {
-			select {
-			case <-stop:
-				return
-			case <-time.After(d):
-				hb <- entities.Beat{}
-			}
-		}
-	}()
-	return hb
-}
-
-func tickNTimes(n int) (<-chan entities.Beat, <-chan struct{}) {
-	hb := make(chan entities.Beat)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		defer close(hb)
-		for i := 0; i < n; i++ {
-			hb <- entities.Beat{}
-		}
-	}()
-	return hb, done
-}
-
-func main() {
-	stop := make(chan struct{})
-	time.AfterFunc(3*time.Second, func() { close(stop) })
-	ris := &randIntStream{}
-	for val := range ris.worker(stop) {
-		fmt.Printf("%d\n", val)
-	}
 }

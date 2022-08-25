@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/mstreet3/depinject/heartbeat"
 )
 
 func TestBeatingRandIntStream(t *testing.T) {
@@ -13,7 +15,7 @@ func TestBeatingRandIntStream(t *testing.T) {
 		// timeout at 95% of deadline to avoid test panic
 		timeout       = time.Duration(int64(95) * int64(time.Until(d)) / int64(100))
 		ctxwt, cancel = context.WithTimeout(context.Background(), timeout)
-		hb, isTicking = tickNTimes(wantCount)
+		hb, isTicking = heartbeat.Beatn(wantCount)
 		gotCount      = 0
 		stopped       = make(chan struct{})
 		ris, err      = NewRandIntStream(nil, WithTicker(hb))
