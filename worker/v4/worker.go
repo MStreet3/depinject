@@ -11,12 +11,12 @@ import (
 )
 
 type config interface {
-	PulseInterval() time.Duration
+	PulseWidth() time.Duration
 }
 
 type randIntStream struct {
 	config
-	ticker <-chan heartbeat.Beat
+	pulse <-chan heartbeat.Beat
 }
 
 func NewRandIntStream(cfg config, opts ...func(*option)) (*randIntStream, error) {
@@ -29,10 +29,10 @@ func NewRandIntStream(cfg config, opts ...func(*option)) (*randIntStream, error)
 
 	ris := &randIntStream{
 		config: cfg,
-		ticker: o.ticker,
+		pulse:  o.ticker,
 	}
 
-	if ris.config == nil && ris.ticker == nil {
+	if ris.config == nil && ris.pulse == nil {
 		return nil, errors.New("must provide either a config or a ticker")
 	}
 
@@ -43,33 +43,41 @@ func (r *randIntStream) Start(ctx context.Context) <-chan int {
 	return r.worker(ctx.Done())
 }
 
+// worker calls does some arbitrary work each time a pulse is received until it is told to stop
 func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
-	values := make(chan int)
+	var (
+		values = make(chan int)
+		pulse  = r.getHeartbeat(stop)
+		doWork = func() int {
+			return rand.Int()
+		}
+	)
+
 	go func() {
 		defer fmt.Println("done working!")
 		defer close(values)
-		ticker := r.getTicker(stop)
 		for {
 			select {
 			case <-stop:
 				return
-			case <-ticker:
+			case <-pulse:
 				fmt.Println("doing work...")
-				values <- rand.Int()
+				select {
+				case values <- doWork():
+				case <-stop:
+					return
+				}
 			}
 		}
 	}()
+
 	return values
 }
 
-func (r *randIntStream) getTicker(stop <-chan struct{}) <-chan heartbeat.Beat {
-	if r.ticker == nil {
-		return heartbeat.BeatUntil(stop, r.getDuration())
+func (r *randIntStream) getHeartbeat(stop <-chan struct{}) <-chan heartbeat.Beat {
+	if r.pulse == nil {
+		return heartbeat.BeatUntil(stop, r.PulseWidth())
 	}
 
-	return r.ticker
-}
-
-func (r *randIntStream) getDuration() time.Duration {
-	return r.PulseInterval()
+	return r.pulse
 }
