@@ -8,24 +8,24 @@ import (
 
 type beat struct{}
 
-type randIntStream struct {
+type RandIntStream struct {
 	hb <-chan beat
 }
 
 // NewRandIntStream is the public constructor that accepts a heartbeat channel that signals
 // when to do work
-func NewRandIntStream(hb <-chan beat) *randIntStream {
-	return &randIntStream{
+func NewRandIntStream(hb <-chan beat) *RandIntStream {
+	return &RandIntStream{
 		hb: hb,
 	}
 }
 
 // Start is the public means of accessing the stream of results from doing work
-func (r *randIntStream) Start(ctx context.Context) <-chan int {
+func (r *RandIntStream) Start(ctx context.Context) <-chan int {
 	return r.worker(ctx.Done())
 }
 
-func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
+func (r *RandIntStream) worker(stop <-chan struct{}) <-chan int {
 	var (
 		values = make(chan int)
 		doWork = func() int {

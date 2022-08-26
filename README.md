@@ -6,17 +6,17 @@ Software engineers strive to write code that succeeds in solving a technical cha
 delivers business value. To this end it is also important that the code be easy to read and reckon
 about, easy to maintain, robust and well tested. "Well tested" is a subjective definition, but if
 we recognize that all code that we write will decay over time it is important to allow room for refactoring
-or improvements. Ultimately, code that has its functional requirements well documented via tests
+and improvements. Ultimately, code that has its functional requirements well documented via tests
 is easier to change because there is less risk of introducing a regression.
 
 To that end it is important to have tools & techniques that allow us as software engineers to decouple
 aspects of our systems into testable units where appropriate. Dependency Injection (DI) is a well
 used technique for achieving a level of decoupling when writing software, in particular DI enables
 an "inversion of control" in the sense that the clients of software components can define their
-dependencies.
+specific use cases by defining the required dependencies.
 
-DI in go has a variety of implementations and the purpose of this post and the accompanying repository
-is to demonstrate the complimentary nature of four DI patterns and their practical application in a small
+DI in Go has a variety of implementations and the purpose of this post and the accompanying repository
+is to demonstrate the complimentary nature of three DI patterns and their practical application in a small
 system. The patterns discussed in this post are:
 
 1. [Constructor Injection](#constructor-injection)
@@ -70,33 +70,30 @@ Through the remainder of this post we will apply DI patterns to this code to:
 
 ## Constructor Injection
 
-The first pattern we will apply is common throughout many Go packages, it is a pattern called _Constructor Injection_.  
-This pattern requires that the `worker` function be changed into a method of a private struct, where
-some internal state can be set through a public constructor of the struct. The private state we will apply
-here is a heartbeat channel, which will allow us to decouple the method from an explicit timing
-mechanism.
+The first pattern we will apply is common throughout many Go packages, it is a pattern called _Constructor Injection_. This pattern requires that the `worker` function be changed into a method of a struct (public for now), where some internal state can be set through a constructor of the struct. The private state we will apply
+here is a heartbeat channel, which will allow us to decouple the method from an explicit timing mechanism.
 
 ```go
 type beat struct{}
 
-type randIntStream struct {
+type RandIntStream struct {
 	hb <-chan beat
 }
 
 // NewRandIntStream is the public constructor that accepts a heartbeat channel that signals
 // when to do work
-func NewRandIntStream(hb <-chan beat) *randIntStream {
-	return &randIntStream{
+func NewRandIntStream(hb <-chan beat) *RandIntStream {
+	return &RandIntStream{
 		hb: hb,
 	}
 }
 
 // Start is the public means of accessing the stream of results from doing work
-func (r *randIntStream) Start(ctx context.Context) <-chan int {
+func (r *RandIntStream) Start(ctx context.Context) <-chan int {
 	return r.worker(ctx.Done())
 }
 
-func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
+func (r *RandIntStream) worker(stop <-chan struct{}) <-chan int {
 	var (
 		values = make(chan int)
 		doWork = func() int {
@@ -123,15 +120,15 @@ func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
 }
 ```
 
-We successfully decoupled the `worker` method from an explicit time intervale by defining a struct called `randInStream` and exposing a public constructor that accepts a heartbeat
+We successfully decoupled the `worker` method from an explicit time duration by defining a struct called `RandInStream` and exposing a constructor that accepts a heartbeat
 channel.
 
 But at what cost?
 
-There are a couple of immediate disadvantages to the approach of using _Constructor Injection_ alone particularly in this design where the heartbeat interval itself is _not_ a struct property:
+There are a couple of immediate disadvantages to the approach of using _Constructor Injection_ alone particularly in this design where the time duration itself is _not_ a struct property:
 
-1. users of `randIntStream` are now responsible for creating and providing a heartbeat channel instead of just a time duration, and
-2. we have introduced a subtle bug in that a `nil` channel blocks forever and we should therefore supply a reasonable default heartbeat channel (technically since only the constructor is public it will not be possible in this design for an external package to create a `randIntStream` with a `nil` channel, but we'll explore supplying a default in the next section).
+1. users of `RandIntStream` are now responsible for creating and providing a heartbeat channel instead of just a time duration, and
+2. we have introduced a subtle bug in that a `nil` channel blocks forever and we should therefore supply a reasonable default heartbeat channel.
 
 ## Just-In-Time (JIT) Injection
 
@@ -204,7 +201,7 @@ func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
 We can see that now we are defining our `heartbeat` channel "just in time" to use the actual channel. At this point we have resolved our need to
 decouple the `worker` method from an internal time duration for testing and made a helper function to handle `heartbeat` generation.
 
-However, because we provide a default `heartbeat` channel if `nil` is passed to the constructor, there is still a default internal time duration. We would like a scalable way to expose this internal value. Also, we need to address the ergonomics of the constructor, it is a bit strange of a coding UX to pass a `nil` channel to get default behavior:
+However, because we provide a default `heartbeat` channel if `nil` is passed to the constructor, there is still a default internal time duration. We would like a scalable way to expose this internal value. Also, since we have made `randIntStream` private, we need to address the ergonomics of the constructor, as it is a bit strange of a coding UX to pass a `nil` channel to get default behavior:
 
 ```go
 // passing nil to get a default heartbeat shows the strange UX of the current constructor
@@ -248,12 +245,12 @@ func (r *randIntStream) getHeartbeat(stop <-chan struct{}) <-chan heartbeat.Beat
 ```
 
 Now we finally have achieved our two goals of decoupling `worker` from any actual timing variables
-and also created a means to configure the pulse width, however, the new constructor
+and also created a means to configure the internal time duration, however, the new constructor
 is cumbersome to use as its not clear why a caller would need to set a `Config` _and_ a `heartbeat`.
 
-The answer is: _they don't_! That would actually be a misconfiguration or `error`.
+The answer is: _they don't_! They must set at least one, which isn't validated and adds to the overall confusion.
 
-Another possible design of the constructor is to split it in two. Each constructor, however, will fail if the caller uses a `nil` value:
+An alternative design of the constructor is to split it in two. Each constructor will now fail if the caller uses a `nil` value:
 
 ```go
 // NewRandIntStreamf returns a rand int stream formatted via the provided heartbeat channel
@@ -315,13 +312,12 @@ func WithPulseWidth(d time.Duration) func(*config) {
 
 ## Unit Testing
 
-Now that our `worker` has been fully decoupled using our various DI approaches, we can easily verify via unit tests that at least
-two conditions are met:
+Now that our `worker` has been fully decoupled using our various DI approaches, we can easily verify via unit tests that at least two conditions are met:
 
 1. a specific number of results are written by `worker`
 2. `worker` is cleaned up when it reads from `stop`
 
-One unit test that achieves these assertions using the `NewRandIntStreamf` constructor is below:
+A unit test that achieves these assertions using the `NewRandIntStreamf` constructor is below:
 
 ```go
 func TestBeatingRandIntStream(t *testing.T) {
@@ -376,3 +372,33 @@ it is possible to synchronize the work of the `randIntStream` with another proce
 scenario, the heartbeat of one process can become the forcing function of our `worker` method.
 
 ## Injecting meaning
+
+Go provides a rich set of tools for developing decoupled, extensible software and the DI patterns reviewed
+in this post simply scratch the surface of what is possible. The last bit of code I will end this post with is an example of how our `worker` could be consumed in a simple `main` function:
+
+```go
+func main() {
+	var (
+		ctxwt, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		cfg           = config.NewConfig()
+		ris, err      = worker.NewRandIntStream(cfg)
+		values        = ris.Start(ctxwt)
+	)
+
+	defer cancel()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for val := range values {
+		fmt.Println(val)
+	}
+}
+```
+
+In this final example we can see how config injection has made creating a new worker extremely simple.
+With that we'll conclude this brief introduction to three key DI patterns in Go. Several books that inspired these musings on DI are:
+
+1. [Hands on Dependency Injection in Go](https://www.packtpub.com/product/hands-on-dependency-injection-in-go/9781789132762)
+2. [Concurrency in Go](https://www.oreilly.com/library/view/concurrency-in-go/9781491941294/)
