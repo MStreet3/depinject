@@ -1,5 +1,7 @@
 # Dependency Injection in Go: A Brief Introduction
 
+_tl;dr_ We can apply DI to decouple our go components. I used a combination of three complimentary DI techniques to enable straightforward unit testing of a struct that executes some arbitrary work at a given time interval. The unit test is explicitly decoupled from any internal timing mechanisms. See the final unit test [here](https://github.com/MStreet3/depinject/blob/e8bca38b3c9dcdb9a3fb146f8f108d9ef27ddd46/worker/v6/worker_test.go#L1) and an example of a `main` method that uses the struct [here](https://github.com/MStreet3/depinject/blob/309471721702f90625d1010cc1d5129cd2c6d0a4/main.go#L1).
+
 ## Overview
 
 Software engineers strive to write code that succeeds in solving a technical challenge and ultimately
