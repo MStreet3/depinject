@@ -1,4 +1,4 @@
-package v4
+package v3
 
 import (
 	"context"
@@ -9,23 +9,15 @@ import (
 	"github.com/mstreet3/depinject/heartbeat"
 )
 
-// locally define a config interface to expose configuration values
-type config interface {
-	PulseWidth() time.Duration // time between heartbeats
-}
-
-// compose randIntStream with the config interface
 type randIntStream struct {
-	config
 	hb <-chan heartbeat.Beat
 }
 
 // NewRandIntStream is the public constructor that accepts a heartbeat channel that signals
 // when to do work
-func NewRandIntStream(cfg config, hb <-chan heartbeat.Beat) *randIntStream {
+func NewRandIntStream(hb <-chan heartbeat.Beat) *randIntStream {
 	return &randIntStream{
-		config: cfg,
-		hb:     hb,
+		hb: hb,
 	}
 }
 
@@ -65,7 +57,7 @@ func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
 // getHeartbeat assigns a default heartbeat for the stream if one has not already been provided
 func (r *randIntStream) getHeartbeat(stop <-chan struct{}) <-chan heartbeat.Beat {
 	if r.hb == nil {
-		r.hb = heartbeat.BeatUntil(stop, r.PulseWidth())
+		r.hb = heartbeat.BeatUntil(stop, 1*time.Second)
 	}
 
 	return r.hb

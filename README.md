@@ -1,11 +1,45 @@
-# Dependency Injection in Go
+# Dependency Injection in Go: A Brief Introduction
+
+## Overview
+
+Software engineers strive to write code that succeeds in solving a technical challenge and ultimately
+delivers business value. To this end it is also important that the code be easy to read and reckon
+about, easy to maintain, robust and well tested. "Well tested" is a subjective definition, but if
+we recognize that all code that we write will decay over time it is important to allow room for refactoring
+or improvements. Ultimately, code that has its functional requirements well documented via tests
+is easier to change because there is less risk of introducing a regression.
+
+To that end it is important to have tools & techniques that allow us as software engineers to decouple
+aspects of our systems into testable units where appropriate. Dependency Injection (DI) is a well
+used technique for achieving a level of decoupling when writing software, in particular DI enables
+an "inversion of control" in the sense that the clients of software components can define their
+dependencies.
+
+DI in go has a variety of implementations and the purpose of this post and the accompanying repository
+is to demonstrate the complimentary nature of four DI patterns and their practical application in a small
+system. The patterns discussed in this post are:
+
+1. [Constructor Injection](#constructor-injection)
+2. [Just-In-Time Injection](#just-in-time-jit-injection)
+3. [Config Injection](#config-injection)
+
+## The Challenge
 
 A common use case for a goroutine is to periodically do a task on a given interval. The standard
 library exports the `After` function from the `time` package for this exact purpose:
 
 ```go
+// worker calls doWork once each second and sends the result onto the values channel.
 func worker(stop <-chan struct{}) <-chan int {
-	values := make(chan int)
+	// initialize the value chan and the work function
+	var (
+		values = make(chan int)
+		doWork = func() int {
+			return rand.Int()
+		}
+	)
+
+	// write values each second
 	go func() {
 		defer close(values)
 		for {
@@ -15,10 +49,11 @@ func worker(stop <-chan struct{}) <-chan int {
 				return
 			case <-time.After(1 * time.Second):
 				fmt.Println("doing work...")
-				values <- rand.Int()
+				values <- doWork()
 			}
 		}
 	}()
+
 	return values
 }
 ```
@@ -26,33 +61,49 @@ func worker(stop <-chan struct{}) <-chan int {
 Now that we have the function written we want to verify its functionality, but what happens when we try to add unit tests?
 
 We run into at least one issue: our tests are tightly coupled to the implementation of `worker` via the internal time delay. This reliance on a
-specific time duration will make tests slow and possibly unpredictable. Our goal is to use dependency injection (DI) to:
+specific time duration will make tests slow and possibly unpredictable.
+
+Through the remainder of this post we will apply DI patterns to this code to:
 
 1. decouple `worker` from explicit use of time
 2. allow a scalable means for setting the pulse width (i.e., time between heartbeats or work calls) for the `worker`
 
 ## Constructor Injection
 
-A common way to break the tight coupling to the internal time setting is to introduce a heartbeat channel
-using a technique known as _Constructor Injection_. We will first make the `worker` function a method
-of a `RandIntStream` struct and allow the ticker to be injected at the time of instantiation.
+The first pattern we will apply is common throughout many Go packages, it is a pattern called _Constructor Injection_.  
+This pattern requires that the `worker` function be changed into a method of a private struct, where
+some internal state can be set through a public constructor of the struct. The private state we will apply
+here is a heartbeat channel, which will allow us to decouple the method from an explicit timing
+mechanism.
 
 ```go
 type beat struct{}
 
-type RandIntStream struct {
-    ticker <-chan beat
+type randIntStream struct {
+	hb <-chan beat
 }
 
-// inject the ticker via the constructor
-func NewRandIntStream(ticker <-chan beat) *RandIntStream {
-	return &RandIntStream{
-		ticker: ticker,
+// NewRandIntStream is the public constructor that accepts a heartbeat channel that signals
+// when to do work
+func NewRandIntStream(hb <-chan beat) *randIntStream {
+	return &randIntStream{
+		hb: hb,
 	}
 }
 
-func (r *RandIntStream) worker(stop <-chan struct{}) <-chan int {
-    values := make(chan int)
+// Start is the public means of accessing the stream of results from doing work
+func (r *randIntStream) Start(ctx context.Context) <-chan int {
+	return r.worker(ctx.Done())
+}
+
+func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
+	var (
+		values = make(chan int)
+		doWork = func() int {
+			return rand.Int()
+		}
+	)
+
 	go func() {
 		defer close(values)
 		for {
@@ -60,31 +111,40 @@ func (r *RandIntStream) worker(stop <-chan struct{}) <-chan int {
 			case <-stop:
 				fmt.Println("done working!")
 				return
-			case <-r.ticker: // worker now uses the ticker injected via the constructor
+			// worker now uses the ticker injected via the constructor
+			case <-r.hb:
 				fmt.Println("doing work...")
-				values <- rand.Int()
+				values <- doWork()
 			}
 		}
 	}()
+
 	return values
 }
 ```
 
-We have now broken the coupling at the expense of making the future owners or testers of the `RandIntStream`
-responsible for more setup work (i.e., creating and providing a heartbeat channel instead of just a time duration).
-Another issue we have introduced is that a `nil` channel blocks forever and we should therefore supply
-a reasonable default value for the ticker.
+We successfully decoupled the `worker` method from an explicit time intervale by defining a struct called `randInStream` and exposing a public constructor that accepts a heartbeat
+channel.
+
+But at what cost?
+
+There are a couple of immediate disadvantages to the approach of using _Constructor Injection_ alone particularly in this design where the heartbeat interval itself is _not_ a struct property:
+
+1. users of `randIntStream` are now responsible for creating and providing a heartbeat channel instead of just a time duration, and
+2. we have introduced a subtle bug in that a `nil` channel blocks forever and we should therefore supply a reasonable default heartbeat channel (technically since only the constructor is public it will not be possible in this design for an external package to create a `randIntStream` with a `nil` channel, but we'll explore supplying a default in the next section).
 
 ## Just-In-Time (JIT) Injection
 
 _Just-in-Time_ or JIT dependency injection is a complementary technique to _Constructor Injection_
 that helps ensure useful default values are present in the methods of our objects. We can solve the
-first challenge of the need to provide a heartbeat channel with a helper function like this:
+first challenge of the need to provide a heartbeat channel with a helper function from a separate `heartbeat` package like this:
 
 ```go
-// getHeartbeat converts a stop condition and a time duration into a heartbeat channel
-func getHeartbeat(stop <-chan struct{}, d time.Duration) <-chan beat {
-	hb := make(chan beat)
+type Beat struct{}
+
+// BeatUntil returns a channel that beats with a pulse width of d until stop is closed
+func BeatUntil(stop <-chan struct{}, d time.Duration) <-chan Beat {
+	hb := make(chan Beat)
 	go func() {
 		defer close(hb)
 		for {
@@ -92,7 +152,7 @@ func getHeartbeat(stop <-chan struct{}, d time.Duration) <-chan beat {
 			case <-stop:
 				return
 			case <-time.After(d):
-				hb <- beat{}
+				hb <- Beat{}
 			}
 		}
 	}()
@@ -103,154 +163,153 @@ func getHeartbeat(stop <-chan struct{}, d time.Duration) <-chan beat {
 Next, we can use JIT to inject the default heartbeat channel as needed:
 
 ```go
-// getTicker defines the ticker channel just-in-time to be used
-func (r *RandIntStream) getTicker(stop <-chan struct{}) <-chan beat {
-	if r.ticker == nil {
-		return getHeartbeat(stop, 1 * time.Second)
+// getHeartbeat assigns a default heartbeat for the stream if one has not already been provided
+func (r *randIntStream) getHeartbeat(stop <-chan struct{}) <-chan heartbeat.Beat {
+	if r.hb == nil {
+		r.hb = heartbeat.BeatUntil(stop, 1*time.Second) // oh no, time interval is back!
 	}
 
-	return r.ticker
+	return r.hb
 }
 
-func (r *RandIntStream) worker(stop <-chan struct{}) <-chan int {
-	values := make(chan int)
+// worker now calls getHeartbeat to return a heartbeat channel "just in time" to start
+// doing work
+func (r *randIntStream) worker(stop <-chan struct{}) <-chan int {
+	var (
+		values = make(chan int)
+		hb     = r.getHeartbeat(stop) // "just in time" call to get heartbeat channel
+		doWork = func() int {
+			return rand.Int()
+		}
+	)
+
 	go func() {
-		defer fmt.Println("done working!")
 		defer close(values)
-		// get the ticker to use before starting our worker loop
-		ticker := r.getTicker(stop)
 		for {
 			select {
 			case <-stop:
+				fmt.Println("done working!")
 				return
-			case <-ticker:
+			case <-hb:
 				fmt.Println("doing work...")
-				values <- rand.Int()
+				values <- doWork()
 			}
 		}
 	}()
+
 	return values
 }
 ```
 
-We can see that now we are defining our `ticker` channel "just in time" to use the actual channel.  
-A unit test would simply have to inject its own channel and at this point we have resolved our need to
-decouple the `worker` method from an internal time duration. However, there is still a default internal
-time duration and we would like a scalable way to expose this internal value.
+We can see that now we are defining our `heartbeat` channel "just in time" to use the actual channel. At this point we have resolved our need to
+decouple the `worker` method from an internal time duration for testing and made a helper function to handle `heartbeat` generation.
+
+However, because we provide a default `heartbeat` channel if `nil` is passed to the constructor, there is still a default internal time duration. We would like a scalable way to expose this internal value. Also, we need to address the ergonomics of the constructor, it is a bit strange of a coding UX to pass a `nil` channel to get default behavior:
+
+```go
+// passing nil to get a default heartbeat shows the strange UX of the current constructor
+ris := NewRandIntStream(nil)
+```
 
 ## Config Injection
 
 _Config Injection_ is a DI technique that relies on a config interface to grant abstract access to internal
 aspects of an object. Here is an example of how we can use _Config Injection_ to access the internal
-time duration of `RandIntStream`:
+time duration of `randIntStream`:
 
 ```go
-// locally define a config interface that provides needed configuration values
-type Config interface {
-	PulseWidth() time.Duration // time between hearbeats
+// locally define a config interface to expose configuration values
+type config interface {
+	PulseWidth() time.Duration // time between heartbeats
 }
 
-// compose RandIntStream with the local interface
-type RandIntStream struct {
-	Config
-	ticker <-chan beat
+// compose randIntStream with the config interface
+type randIntStream struct {
+	config
+	hb <-chan heartbeat.Beat
 }
 
-// update the RandIntStream constructor to inject a config and ticker
-func NewRandIntStream(cfg Config, ticker <-chan beat) *RandIntStream {
-	return &RandIntStream{
-		Config: cfg,
-		ticker: ticker,
+// NewRandIntStream now accepts as cfg a struct that satisfies the config interface along with a heartbeat channel
+func NewRandIntStream(cfg config, hb <-chan heartbeat.Beat) *randIntStream {
+	return &randIntStream{
+		config: cfg,
+		hb:     hb,
 	}
 }
 
-// getTicker defines the ticker channel just-in-time to be used and fallsback to
-// a heartbeat channel with a config defined pulse width
-func (r *RandIntStream) getTicker(stop <-chan struct{}) <-chan beat {
-	if r.ticker == nil {
-		return getHeartbeat(stop, r.PulseWidth())
+// getHeartbeat now gets the pulse width from the config interface
+func (r *randIntStream) getHeartbeat(stop <-chan struct{}) <-chan heartbeat.Beat {
+	if r.hb == nil {
+		r.hb = heartbeat.BeatUntil(stop, r.PulseWidth())
 	}
 
-	return r.ticker
+	return r.hb
 }
 ```
 
 Now we finally have achieved our two goals of decoupling `worker` from any actual timing variables
-and also created a means to configure the pulse width, however, as is often the case with _Constructor Injection_
-we have begun to "leak" the implementation details of our `RandIntStream`. Also, the new constructor
-is cumbersome to use as its not clear why a caller would need to set a `Config` _and_ a `ticker`.
+and also created a means to configure the pulse width, however, the new constructor
+is cumbersome to use as its not clear why a caller would need to set a `Config` _and_ a `heartbeat`.
 
-## Functional Options
+The answer is: _they don't_! That would actually be a misconfiguration or `error`.
 
-_Functional Options_ is a method of specifying optional arguments to inject into an object. In brief,
-the technique relies on applying a chain of functions with locally scoped config values to a shared
-option state. Here is what it looks like in practice:
+Another possible design of the constructor is to split it in two. Each constructor, however, will fail if the caller uses a `nil` value:
 
 ```go
-// option is a private struct of the package that holds the default ticker value
-type option struct {
-	ticker <-chan beat
+// NewRandIntStreamf returns a rand int stream formatted via the provided heartbeat channel
+func NewRandIntStreamf(hb <-chan heartbeat.Beat) (*randIntStream, error) {
+	if hb == nil {
+		return nil, errors.New("cannot provide a nil channel to constructor")
+	}
+	return &randIntStream{
+		hb: hb,
+	}, nil
 }
 
-// by default the ticker value is nil, which will get replaced via JIT DI
-func newOption() *option {
-	return &option{}
-}
-
-// WithTicker is a public function for accessing option to set the ticker value
-func WithTicker(ticker <-chan beat) func(*option) {
-	return func(o *option){
-		o.ticker = ticker
+func NewRandIntStream(cfg config) (*randIntStream, error) {
+	if cfg == nil {
+		return nil, errors.New("cannot provide a nil config to constructor")
 	}
-}
-
-// modify the constructor to use a variadic slice of opts to set up the options
-func NewRandIntStream(cfg Config, opts ...func(*option)) *RandIntStream {
-	o := newOption()
-
-	// apply each function to the option
-	for _, fn := range opts {
-		fn(o)
-	}
-
-	return &RandIntStream{
-		Config: cfg,
-		ticker: o.ticker,
-	}
+	return &randIntStream{
+		config: cfg,
+	}, nil
 }
 ```
 
-We can apply the same technique to the config.
+The final piece of our _Config Injection_ technique is to create a `config` package that exports some real configuration values that will be a dependency of the layer that actually uses the `randIntStream`. An example of the `config` package is shown here and it uses [functional options](https://dave.cheney.net/2014/10/17/functional-options-for-friendly-apis) to allow increased extensibility:
 
 ```go
 type config struct {
-	d      time.Duration
+	d time.Duration
 }
 
-func newDefaultConfig() *config {
+func (c *config) PulseWidth() time.Duration {
+	return c.d
+}
+
+// newConfig creates a new instance of the default config
+func newConfig() *config {
 	return &config{
 		d: 250 * time.Millisecond,
 	}
 }
 
-func WithPulseWidth(d time.Duration) func(*config) {
-	return func(cfg *config) {
-		cfg.d = d
-	}
-}
-
+// NewConfig is the public constructor of the config package that allows other callers to inject config as needed
 func NewConfig(opts ...func(*config)) *config {
-	cfg := newDefaultConfig()
+	cfg := newConfig()
 	for _, fn := range opts {
 		fn(cfg)
 	}
 	return &config{
-		d:      cfg.d,
+		d: cfg.d,
 	}
 }
 
-func (c *config) PulseWidth() time.Duration {
-	return c.d
+// WithPulsWidth is the public function for setting a config's pulse width
+func WithPulseWidth(d time.Duration) func(*config) {
+	return func(cfg *config) {
+		cfg.d = d
+	}
 }
 ```
 
@@ -262,47 +321,58 @@ two conditions are met:
 1. a specific number of results are written by `worker`
 2. `worker` is cleaned up when it reads from `stop`
 
-One unit test that achieves these assertions is below:
+One unit test that achieves these assertions using the `NewRandIntStreamf` constructor is below:
 
 ```go
 func TestBeatingRandIntStream(t *testing.T) {
 	var (
-		wantCount     = 100
-		gotCount      = 0
-		d, _          = t.Deadline() // get the test deadline if it exists
-		timeout       = time.Duration(int64(95) * int64(time.Until(d)) / int64(100)) // timeout at 95% of deadline to avoid test panic
+		wantCount = 100
+		d, _      = t.Deadline()
+		// timeout at 95% of deadline to avoid test panic
+		timeout       = time.Duration(int64(95) * int64(time.Until(d)) / int64(100))
 		ctxwt, cancel = context.WithTimeout(context.Background(), timeout)
-		hb, isTicking = tickNTimes(wantCount)
+		hb, isBeating = heartbeat.Beatn(wantCount)
+		gotCount      = 0
 		stopped       = make(chan struct{})
-		ris           = NewRandIntStream(NewConfig(), WithTicker(hb))
+		ris, err      = NewRandIntStreamf(hb)
 	)
 
 	t.Cleanup(func() {
 		cancel()
 	})
 
-	// read while ticking, signal when stopped
+	if err != nil {
+		t.Fatalf("%s", err.Error())
+	}
+
+	// go read while heart is beating, signal when stopped
 	go func() {
 		defer close(stopped)
-		for range ris.worker(isTicking) {
+		for range ris.worker(isBeating) {
 			gotCount++
 		}
 	}()
 
-	// this loop will run until we either timeout or wantCount and gotCount are equal (condition 1)
+	// loop until counts match or timeout (condition 1)
 	for gotCount != wantCount {
 		select {
 		case <-ctxwt.Done():
-			t.Logf("test timedout: %s", ctxwt.Err())
-			t.FailNow()
+			t.Fatalf("test timedout: %s", ctxwt.Err())
 		default:
 		}
 	}
 
-	// expect the worker to be cleaned up when the heartbeat stops (condition 2)
+	// require that the beating is stopped (condition 2)
 	_, open := <-stopped
 	if open {
-		t.Errorf("expected worker to be stopped")
+		t.Fatalf("expected worker to be stopped")
 	}
 }
 ```
+
+The nice thing about the `NewRandIntStreamf` constructor is that it makes testing simple, but it is public
+because its use can go beyond just testing. Since this constructor exposes a heartbeat channel directly,
+it is possible to synchronize the work of the `randIntStream` with another process. In such a
+scenario, the heartbeat of one process can become the forcing function of our `worker` method.
+
+## Injecting meaning

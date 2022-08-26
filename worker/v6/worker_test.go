@@ -1,4 +1,4 @@
-package v4
+package v6
 
 import (
 	"context"
@@ -18,7 +18,7 @@ func TestBeatingRandIntStream(t *testing.T) {
 		hb, isTicking = heartbeat.Beatn(wantCount)
 		gotCount      = 0
 		stopped       = make(chan struct{})
-		ris, err      = NewRandIntStream(nil, WithHeartbeat(hb))
+		ris, err      = NewRandIntStreamf(hb)
 	)
 
 	t.Cleanup(func() {
@@ -26,9 +26,10 @@ func TestBeatingRandIntStream(t *testing.T) {
 	})
 
 	if err != nil {
-		t.Fatalf("expected no error on constructor")
+		t.Fatalf("%s", err.Error())
 	}
 
+	// read while ticking, signal when stopped
 	go func() {
 		defer close(stopped)
 		for range ris.worker(isTicking) {
@@ -36,6 +37,7 @@ func TestBeatingRandIntStream(t *testing.T) {
 		}
 	}()
 
+	// loop until counts match or timeout
 	for gotCount != wantCount {
 		select {
 		case <-ctxwt.Done():
@@ -44,6 +46,7 @@ func TestBeatingRandIntStream(t *testing.T) {
 		}
 	}
 
+	// require that the beating is stopped
 	_, open := <-stopped
 	if open {
 		t.Fatalf("expected worker to be stopped")

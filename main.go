@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/mstreet3/depinject/config"
-	worker "github.com/mstreet3/depinject/worker/v4"
+	worker "github.com/mstreet3/depinject/worker/v6"
 )
 
 func main() {

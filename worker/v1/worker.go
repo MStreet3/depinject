@@ -6,8 +6,17 @@ import (
 	"time"
 )
 
+// worker calls doWork once each second and sends the result onto the values channel.
 func worker(stop <-chan struct{}) <-chan int {
-	values := make(chan int)
+	// initialize the value chan and the work function
+	var (
+		values = make(chan int)
+		doWork = func() int {
+			return rand.Int()
+		}
+	)
+
+	// write values each second
 	go func() {
 		defer close(values)
 		for {
@@ -17,9 +26,10 @@ func worker(stop <-chan struct{}) <-chan int {
 				return
 			case <-time.After(1 * time.Second):
 				fmt.Println("doing work...")
-				values <- rand.Int()
+				values <- doWork()
 			}
 		}
 	}()
+
 	return values
 }
