@@ -11,13 +11,12 @@ import (
 func TestBeatingRandIntStream(t *testing.T) {
 	var (
 		wantCount = 100
+		gotCount  = 0
 		d, _      = t.Deadline()
 		// timeout at 95% of deadline to avoid test panic
 		timeout       = time.Duration(int64(95) * int64(time.Until(d)) / int64(100))
 		ctxwt, cancel = context.WithTimeout(context.Background(), timeout)
-		hb, isTicking = heartbeat.Beatn(wantCount)
-		gotCount      = 0
-		stopped       = make(chan struct{})
+		hb, isBeating = heartbeat.Beatn(wantCount)
 		ris, err      = NewRandIntStreamf(hb)
 	)
 
@@ -26,29 +25,28 @@ func TestBeatingRandIntStream(t *testing.T) {
 	})
 
 	if err != nil {
-		t.Fatalf("%s", err.Error())
+		t.Fatalf("unexpected constructor error: %s", err.Error())
 	}
 
-	// read while ticking, signal when stopped
+	// go count values read while heart is beating
 	go func() {
-		defer close(stopped)
-		for range ris.worker(isTicking) {
+		for range ris.Start(ctxwt) {
 			gotCount++
 		}
 	}()
 
-	// loop until counts match or timeout
+	// loop until counts match or timeout (condition 1)
 	for gotCount != wantCount {
 		select {
 		case <-ctxwt.Done():
-			t.Fatalf("test timedout: %s", ctxwt.Err())
+			t.Fatalf("unexpected timeout: %s", ctxwt.Err())
 		default:
 		}
 	}
 
-	// require that the beating is stopped
-	_, open := <-stopped
+	// require that the beating is stopped (condition 2)
+	_, open := <-isBeating
 	if open {
-		t.Fatalf("expected worker to be stopped")
+		t.Fatalf("expected heartbeat to be stopped")
 	}
 }
