@@ -120,7 +120,7 @@ func (r *RandIntStream) worker(stop <-chan struct{}) <-chan int {
 }
 ```
 
-We successfully decoupled the `worker` method from an explicit time duration by defining a struct called `RandInStream` and exposing a constructor that accepts a heartbeat
+We successfully decoupled the `worker` method from an explicit time duration by defining a struct called `RandIntStream` and exposing a constructor that accepts a heartbeat
 channel.
 
 But at what cost?
